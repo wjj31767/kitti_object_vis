@@ -55,9 +55,11 @@ class kitti_object(object):
         self.calib_dir = os.path.join(self.split_dir, "calib")
 
         self.depthpc_dir = os.path.join(self.split_dir, "depth_pc")
-        self.lidar_dir = os.path.join(self.split_dir, lidar_dir)
+        self.lidar_dir = args.lidar
         self.depth_dir = os.path.join(self.split_dir, depth_dir)
         self.pred_dir = os.path.join(self.split_dir, pred_dir)
+        self.lidaradv_dir = args.lidaradv
+        self.predadv_dir = args.predadvdir
 
     def __len__(self):
         return self.num_samples
@@ -72,7 +74,11 @@ class kitti_object(object):
         lidar_filename = os.path.join(self.lidar_dir, "%06d.bin" % (idx))
         print(lidar_filename)
         return utils.load_velo_scan(lidar_filename, dtype, n_vec)
-
+    def get_lidaradv(self, idx, dtype=np.float32, n_vec=4):
+        assert idx < self.num_samples
+        lidar_filename = os.path.join(self.lidaradv_dir, "%06d.bin" % (idx))
+        print(lidar_filename)
+        return utils.load_velo_scan(lidar_filename, dtype, n_vec)
     def get_calibration(self, idx):
         assert idx < self.num_samples
         calib_filename = os.path.join(self.calib_dir, "%06d.txt" % (idx))
@@ -88,10 +94,19 @@ class kitti_object(object):
         pred_filename = os.path.join(self.pred_dir, "%06d.txt" % (idx))
         is_exist = os.path.exists(pred_filename)
         if is_exist:
-            return utils.read_label(pred_filename)
+            print(pred_filename)
+            return utils.read_pred_label(pred_filename)
         else:
             return None
-
+    def get_predadv_objects(self, idx):
+        assert idx < self.num_samples
+        pred_filename = os.path.join(self.predadv_dir, "%06d.txt" % (idx))
+        is_exist = os.path.exists(pred_filename)
+        if is_exist:
+            print(pred_filename)
+            return utils.read_pred_label(pred_filename)
+        else:
+            return None
     def get_depth(self, idx):
         assert idx < self.num_samples
         img_filename = os.path.join(self.depth_dir, "%06d.png" % (idx))
@@ -344,6 +359,7 @@ def get_depth_pt3d(depth):
 
 def show_lidar_with_depth(
     pc_velo,
+    pc_veloadv,
     objects,
     calib,
     fig,
@@ -351,6 +367,7 @@ def show_lidar_with_depth(
     img_width=None,
     img_height=None,
     objects_pred=None,
+    objectsadv_pred=None,
     depth=None,
     cam_img=None,
     constraint_box=False,
@@ -364,14 +381,15 @@ def show_lidar_with_depth(
     from viz_util import draw_lidar_simple, draw_lidar, draw_gt_boxes3d
 
     print(("All point num: ", pc_velo.shape[0]))
-    if img_fov:
-        pc_velo_index = get_lidar_index_in_image_fov(
-            pc_velo[:, :3], calib, 0, 0, img_width, img_height
-        )
-        pc_velo = pc_velo[pc_velo_index, :]
-        print(("FOV point num: ", pc_velo.shape))
-    print("pc_velo", pc_velo.shape)
-    draw_lidar(pc_velo, fig=fig, pc_label=pc_label)
+    # if img_fov:
+    #     pc_velo_index = get_lidar_index_in_image_fov(
+    #         pc_velo[:, :3], calib, 0, 0, img_width, img_height
+    #     )
+    #     pc_velo = pc_velo[pc_velo_index, :]
+    #     print(("FOV point num: ", pc_velo.shape))
+    # print("pc_velo", pc_velo.shape)
+    draw_lidar(pc_velo, fig=fig, pc_label=pc_label,color=(1,1,0))
+    draw_lidar(pc_veloadv, fig=fig, pc_label=pc_label,color=(0,1,1))
 
     # Draw depth
     if depth is not None:
@@ -409,6 +427,36 @@ def show_lidar_with_depth(
         color = (1, 0, 0)
         for obj in objects_pred:
             if obj.type == "DontCare":
+                continue
+            if obj.score<=0.2:
+                continue
+            # Draw 3d bounding box
+            _, box3d_pts_3d = utils.compute_box_3d(obj, calib.P)
+            box3d_pts_3d_velo = calib.project_rect_to_velo(box3d_pts_3d)
+            print("box3d_pts_3d_velo:")
+            print(box3d_pts_3d_velo)
+            draw_gt_boxes3d([box3d_pts_3d_velo], fig=fig, color=color)
+            # Draw heading arrow
+            _, ori3d_pts_3d = utils.compute_orientation_3d(obj, calib.P)
+            ori3d_pts_3d_velo = calib.project_rect_to_velo(ori3d_pts_3d)
+            x1, y1, z1 = ori3d_pts_3d_velo[0, :]
+            x2, y2, z2 = ori3d_pts_3d_velo[1, :]
+            mlab.plot3d(
+                [x1, x2],
+                [y1, y2],
+                [z1, z2],
+                color=color,
+                tube_radius=None,
+                line_width=1,
+                figure=fig,
+            )
+    if objectsadv_pred is not None:
+        print("here?")
+        color = (1, 1, 1)
+        for obj in objectsadv_pred:
+            if obj.type == "DontCare":
+                continue
+            if obj.score<=0.2:
                 continue
             # Draw 3d bounding box
             _, box3d_pts_3d = utils.compute_box_3d(obj, calib.P)
@@ -703,7 +751,6 @@ def dataset_viz(root_dir, args):
     dataset = kitti_object(root_dir, split=args.split, args=args)
     ## load 2d detection results
     #objects2ds = read_det_file("box2d.list")
-
     if args.show_lidar_with_depth:
         import mayavi.mlab as mlab
 
@@ -725,7 +772,11 @@ def dataset_viz(root_dir, args):
             # if not dataset.isexist_pred_objects(data_idx):
             #    continue
             objects_pred = dataset.get_pred_objects(data_idx)
+            print(objects_pred)
             if objects_pred == None:
+                continue
+            objectsadv_pred = dataset.get_predadv_objects(data_idx)
+            if objectsadv_pred==None:
                 continue
         if objects_pred == None:
             print("no pred file")
@@ -739,6 +790,7 @@ def dataset_viz(root_dir, args):
         if args.dtype64:
             dtype = np.float64
         pc_velo = dataset.get_lidar(data_idx, dtype, n_vec)[:, 0:n_vec]
+        pc_veloadv = dataset.get_lidaradv(data_idx, dtype, n_vec)[:, 0:n_vec]
         calib = dataset.get_calibration(data_idx)
         img = dataset.get_image(data_idx)
         img_height, img_width, _ = img.shape
@@ -779,6 +831,7 @@ def dataset_viz(root_dir, args):
             # Draw 3d box in LiDAR point cloud
             show_lidar_with_depth(
                 pc_velo,
+                pc_veloadv,
                 objects,
                 calib,
                 fig,
@@ -786,6 +839,7 @@ def dataset_viz(root_dir, args):
                 img_width,
                 img_height,
                 objects_pred,
+                objectsadv_pred,
                 depth,
                 img,
                 constraint_box=args.const_box,
@@ -858,7 +912,7 @@ if __name__ == "__main__":
         "-d",
         "--dir",
         type=str,
-        default="data/object",
+        default="/home/wei/data/sets/kitti_second",
         metavar="N",
         help="input  (default: data/object)",
     )
@@ -889,7 +943,14 @@ if __name__ == "__main__":
         "-l",
         "--lidar",
         type=str,
-        default="velodyne",
+        default="/home/wei/second.pytorch/second/model/eval_results/step_349965",
+        metavar="N",
+        help="velodyne dir  (default: velodyne)",
+    )
+    parser.add_argument(
+        "--lidaradv",
+        type=str,
+        default="/home/wei/second.pytorch/second/model/eval_results/step_349965/fgsm0.01/bin",
         metavar="N",
         help="velodyne dir  (default: velodyne)",
     )
@@ -906,6 +967,13 @@ if __name__ == "__main__":
         "--preddir",
         type=str,
         default="pred",
+        metavar="N",
+        help="predicted boxes  (default: pred)",
+    )
+    parser.add_argument(
+        "--predadvdir",
+        type=str,
+        default="/home/wei/second.pytorch/second/model/eval_results/step_349965/fgsm0.01/",
         metavar="N",
         help="predicted boxes  (default: pred)",
     )
